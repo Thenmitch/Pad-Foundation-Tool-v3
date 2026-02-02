@@ -1,0 +1,71 @@
+/* ---- Background ---- */
+.stApp {
+    background-color: #DAE1E8;
+}
+
+/* ---- Headings ---- */
+h1, h2, h3 {
+    color: #1e2d55;
+}
+
+/* ---- Buttons ---- */
+.stButton>button {
+    background-color: #bede18;
+    color: #1e2d55;
+    border-radius: 6px;
+}
+
+/* ---- Sidebar ---- */
+.css-1d391kg {   /* sidebar */
+    background-color: #bede18;
+}
+
+/* ---- Background WITH Watermark (correct layering) ---- */
+.stApp {
+    background-color: #DAE1E8;
+    position: relative;   /* needed for layering */
+}
+
+.stApp::before {
+    content: "";
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 40vw;
+    max-width: 700px;
+    min-width: 280px;
+    height: 40vw;
+    max-height: 700px;
+    min-height: 280px;
+
+    background-image: url("data:image/png;base64,{{WATERMARK_BASE64}}");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+
+    opacity: 0.05;        /* faint watermark */
+    pointer-events: none; /* allows clicks through it */
+    z-index: 0;           /* sits ABOVE background, BELOW content */
+}
+/* ---- Make Streamlit content sit ABOVE the watermark ---- */
+.stApp > div {
+    position: relative;
+    z-index: 1;
+}
+
+
+/* -------- STYLE STREAMLIT DATAFRAME HEADER ROW -------- */
+
+/* Target ONLY the top header row */
+div[data-testid="stDataFrame"] thead th {
+    background-color: rgba(30, 45, 85, 0.5) !important; /* #1e2d55 at 50% transparency */
+    color: #bede18 !important;   /* your green */
+    text-align: center !important;
+    font-weight: bold !important;
+}
+
+/* (Optional) centre all table values */
+div[data-testid="stDataFrame"] tbody td {
+    text-align: center;
+}
