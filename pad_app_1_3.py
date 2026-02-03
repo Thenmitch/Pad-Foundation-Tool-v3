@@ -2,10 +2,6 @@ import streamlit as st
 import math
 import base64
 
-
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import A4
 from io import BytesIO
 from PIL import Image
 from assumptions import get_engineering_assumptions
@@ -517,3 +513,4 @@ with results_col:
 
         # SIMPLE STREAMLIT TABLE
         st.dataframe(df, use_container_width=True)
+
