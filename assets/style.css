@@ -1,29 +1,20 @@
-/* ---- Background ---- */
+/* ========================================================= */
+/* WHE — CLEAN MODERN THEME (FULL REPLACEMENT)              */
+/* ========================================================= */
+
+:root {
+    --whe-blue: #1e2d55;
+    --whe-green: #bede18;
+    --whe-green-soft: rgba(190, 222, 24, 0.35);
+}
+
+/* ========================================================= */
+/* BACKGROUND + WATERMARK (KEEP YOUR SETUP)                 */
+/* ========================================================= */
+
 .stApp {
     background-color: #DAE1E8;
-}
-
-/* ---- Headings ---- */
-h1, h2, h3 {
-    color: #1e2d55;
-}
-
-/* ---- Buttons ---- */
-.stButton>button {
-    background-color: #bede18;
-    color: #1e2d55;
-    border-radius: 6px;
-}
-
-/* ---- Sidebar ---- */
-.css-1d391kg {   /* sidebar */
-    background-color: #bede18;
-}
-
-/* ---- Background WITH Watermark (correct layering) ---- */
-.stApp {
-    background-color: #DAE1E8;
-    position: relative;   /* needed for layering */
+    position: relative;
 }
 
 .stApp::before {
@@ -44,28 +35,142 @@ h1, h2, h3 {
     background-position: center;
     background-size: contain;
 
-    opacity: 0.05;        /* faint watermark */
-    pointer-events: none; /* allows clicks through it */
-    z-index: 0;           /* sits ABOVE background, BELOW content */
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 0;
 }
-/* ---- Make Streamlit content sit ABOVE the watermark ---- */
+
+/* Ensure content sits above watermark */
 .stApp > div {
     position: relative;
     z-index: 1;
 }
 
+/* ========================================================= */
+/* HEADINGS                                                  */
+/* ========================================================= */
 
-/* -------- STYLE STREAMLIT DATAFRAME HEADER ROW -------- */
+h1, h2, h3 {
+    color: var(--whe-blue);
+}
 
-/* Target ONLY the top header row */
+/* ========================================================= */
+/* BUTTONS                                                   */
+/* ========================================================= */
+
+.stButton>button {
+    background-color: var(--whe-green);
+    color: var(--whe-blue);
+    border-radius: 8px;
+    border: none;
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    transition: all 0.15s ease-in-out;
+}
+
+.stButton>button:hover {
+    background-color: #c9ea1a;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.12);
+}
+
+/* ========================================================= */
+/* SIDEBAR                                                   */
+/* ========================================================= */
+
+.css-1d391kg {
+    background-color: var(--whe-green);
+}
+
+/* ========================================================= */
+/* DATAFRAME HEADER STYLE                                    */
+/* ========================================================= */
+
 div[data-testid="stDataFrame"] thead th {
-    background-color: rgba(30, 45, 85, 0.5) !important; /* #1e2d55 at 50% transparency */
-    color: #bede18 !important;   /* your green */
+    background-color: rgba(30, 45, 85, 0.5) !important;
+    color: var(--whe-green) !important;
     text-align: center !important;
     font-weight: bold !important;
 }
 
-/* (Optional) centre all table values */
 div[data-testid="stDataFrame"] tbody td {
     text-align: center;
+}
+/* ============================= */
+/* SIMPLE SLIDER FIX (NEW APPROACH) */
+/* ============================= */
+
+/* Make the slider bar green with a small blue border */
+div[data-baseweb="slider"] div[role="slider"] {
+    background: #bede18 !important;
+    border: 1px solid #1e2d55 !important;
+}
+
+
+/* REMOVE the green pill shapes around min/max numbers */
+div[data-baseweb="slider"] [data-testid="stTickBar"] span {
+    background: none !important;
+    box-shadow: none !important;
+    color: #1e2d55 !important;
+}
+
+
+/* ========================================================= */
+/* CHECKBOXES (CLEAN + MODERN)                               */
+/* ========================================================= */
+
+div[data-baseweb="checkbox"] svg {
+    fill: var(--whe-green) !important;
+}
+
+div[data-baseweb="checkbox"] input {
+    border-color: var(--whe-blue) !important;
+    border-radius: 4px;
+}
+
+/* ========================================================= */
+/* NUMBER INPUTS                                             */
+/* ========================================================= */
+
+div[data-baseweb="input"] input {
+    color: var(--whe-blue) !important;
+    border-radius: 6px;
+    border: 1px solid #cfd6de;
+}
+
+div[data-baseweb="input"] input:focus {
+    border-color: var(--whe-green) !important;
+    box-shadow: 0 0 0 2px var(--whe-green-soft);
+}
+
+/* ========================================================= */
+/* METRICS                                                   */
+/* ========================================================= */
+
+div[data-testid="stMetricLabel"] {
+    color: var(--whe-blue) !important;
+    font-size: 0.9rem;
+}
+
+div[data-testid="stMetricValue"] {
+    color: var(--whe-blue) !important;
+    font-weight: 600;
+}
+
+/* ========================================================= */
+/* EXPANDERS                                                 */
+/* ========================================================= */
+
+div[data-testid="stExpander"] summary {
+    color: var(--whe-blue) !important;
+    font-weight: 600;
+}
+
+/* ========================================================= */
+/* DIVIDERS                                                  */
+/* ========================================================= */
+
+hr {
+    border-color: rgba(30, 45, 85, 0.2);
 }
