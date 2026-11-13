@@ -162,13 +162,13 @@ with input_col:
     col1, col2 = st.columns(2)
 
     with col1:
-        G = st.number_input("Dead load, G (kN)", value=750.0, step=50.0)
+        G = st.number_input("Dead load, G (kN)", value=3000.0, step=25.0)
         Sur_G = st.number_input(
             "Additional surcharge Dead load (kN/m²)", value=0.0, step=0.5
         )
 
     with col2:
-        Q = st.number_input("Live load, Q (kN)", value=500.0, step=50.0)
+        Q = st.number_input("Live load, Q (kN)", value=150.0, step=25.0)
         Sur_Q = st.number_input(
             "Additional surcharge Live load (kN/m²)", value=0.0, step=0.5
         )
@@ -231,7 +231,7 @@ def solve_pad(
     # --------------------------------------------------
     while True:
 
-        t = 0.5 * B  # ← enforced geometry rule
+        t = max(0.5 * B, min_depth) # ← enforced geometry rule
 
         # Surcharges
         N_ck_sur_G = Sur_G * B**2
@@ -303,7 +303,7 @@ with calc_col:
         # ---- round UP (conservative) ----
         B_final = round_up(B_opt, rounding)
         # ---- enforce geometry AFTER rounding ----
-        t_round = 0.5 * B_final
+        t_round = max(0.5 * B_final, min depth)
 
         # ---- self-weight ----
         W_pad = B_final**2 * t_round * pad_unit_weight if include_self_weight else 0.0
