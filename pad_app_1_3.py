@@ -303,7 +303,7 @@ with calc_col:
         # ---- round UP (conservative) ----
         B_final = round_up(B_opt, rounding)
         # ---- enforce geometry AFTER rounding ----
-        t_round = max(0.5 * B_final, min depth)
+        t_round = max(0.5 * B_final, min_depth)
 
         # ---- self-weight ----
         W_pad = B_final**2 * t_round * pad_unit_weight if include_self_weight else 0.0
