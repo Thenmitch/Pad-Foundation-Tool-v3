@@ -14,7 +14,7 @@ def get_engineering_assumptions(
 ):
     return f"""
 ### Structural assumptions
-- Square unreinforced concrete pad foundation
+- Square unreinforced (plain) concrete pad foundation
 - Uniform pad thickness
 - Centrally applied axial load only
 - No moments or horizontal loads considered
@@ -24,12 +24,14 @@ def get_engineering_assumptions(
 - Dead (G) and live (Q) loads applied at column base
 - Serviceability limit state load combination:
   
-  Nck = γG·G + γQ·Q
+  Nck = γG·(G + W + Gₛ) + γQ·(Q + Qₛ)
 - Partial factors:
   - γG = {gamma_G:.2f}
   - γQ = {gamma_Q:.2f}
-- Pad self-weight treated as a permanent action
+- Pad self-weight (W) treated as a permanent action
 - Concrete unit weight γc = {gamma_conc:.1f} kN/m³
+  (optionally reduced to γc − γs, the effective unit weight, if selected)
+- Surcharges (Gₛ, Qₛ) are entered as pressures (kN/m²) and act over the full pad area
 
 ### Ground assumptions
 - Allowable bearing pressure qₐ provided by geotechnical design
@@ -40,22 +42,28 @@ def get_engineering_assumptions(
 ### Geometric assumptions
 - Minimum pad depth = {min_depth:.2f} m
 - Minimum pad width = {min_width:.2f} m
-- 45° load dispersion applied:
-  
-  B = 2t
+- Pad thickness governed by 45° load dispersion from the column face:
 
-- Foundation dimensions rounded **upwards only** to {rounding:.2f} m increments
+  t = max((B − c) / 2, t_min)
+
+  where B = pad width, c = column / pier width, t_min = minimum pad depth
+- Pad width is solved directly so that bearing pressure, including
+  self-weight and surcharge, does not exceed the target utilisation
+- Foundation widths rounded **upwards only** to {rounding:.2f} m increments, then
+  re-checked against the allowable bearing pressure
 
 ### Design limitations
 The following checks are **not included**:
-- Punching shear
-- One-way shear
-- Flexural reinforcement design
-- Crack control
+- Plain concrete tension check (flexural tension in the unreinforced pad,
+  EC2 Section 12)
 - Sliding, uplift, overturning
 - Groundwater effects
-- EC7 Design Approach combinations
+- EC7 Design Approach combinations (ULS factored loads)
 - Settlement checks
+
+The 45° dispersion rule assumes bearing pressures that are modest relative to
+the concrete tensile strength. At high bearing pressures or with low-strength
+concrete, a steeper dispersion angle (thicker pad) may be required.
 
 ⚠️ This tool is for **preliminary sizing only** and must not be used for final design.
 """
