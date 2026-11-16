@@ -124,9 +124,13 @@ with input_col:
         target_utilisation = st.slider(
             "Target bearing utilisation (%)",
             min_value=50,
-            max_value=95,
+            max_value=100,
             value=90,
             step=5,
+            help=(
+                "Preferred bearing pressure as a % of qₐ. If this can't be "
+                "reached, the pad is sized to the smallest size within 100% of qₐ."
+            ),
         ) / 100.0
 
         soil_unit_weight = st.number_input(
@@ -218,14 +222,14 @@ def round_up(value, inc):
 # Bearing pressure as a function of B:
 #   q(B) = N_base / B²  +  surcharge  +  γG·γpad·t(B)
 #
-# With t = B/2 the self-weight term GROWS with B, so q(B) falls, hits a
-# minimum, then rises again. That means:
-#   * the old "while util > target: B += 0.01" loop could never terminate
-#     for large loads (no size satisfies the target), and
-#   * even when it did converge it took thousands of iterations.
+# Because t grows with B, the self-weight term GROWS with B, so q(B) falls,
+# hits a minimum, then rises again.
 #
-# Instead: find the minimum of q(B) analytically, check feasibility, then
-# bisect on the falling branch for the smallest B that meets the target.
+# Approach: find the minimum of q(B) analytically, check feasibility, then
+# bisect on the falling branch for the smallest B that meets a pressure goal.
+#   1. Try the target utilisation (a preference).
+#   2. If unreachable, fall back to 100% of qa (the hard limit).
+#   3. If even that is unreachable, the pad is infeasible.
 # --------------------------------------------------
 
 def solve_pad(
@@ -250,31 +254,44 @@ def solve_pad(
         q_sw = gamma_G * pad_unit_weight * t if include_self_weight else 0.0
         return N_base / B**2 + q_sur + q_sw
 
-    # Lower bound: bearing-only width, or the minimum width
-    B_lo = max(math.sqrt(N_base / q_target), min_width, col_width)
-
     # Width at which pressure is lowest (end of falling branch)
     if include_self_weight and pad_unit_weight > 0:
         B_star = (4.0 * N_base / (gamma_G * pad_unit_weight)) ** (1.0 / 3.0)
     else:
         B_star = 1e4  # no self-weight: pressure only ever falls
-    B_hi = max(B_lo, 2.0 * min_depth + col_width, B_star)
 
-    # Feasibility: can ANY size meet the target?
-    if pressure(B_hi) > q_target:
-        return None
+    def smallest_B(goal):
+        """Smallest width with pressure <= goal.
+        Returns (B or None, lowest achievable pressure, width at that minimum)."""
+        B_lo = max(math.sqrt(N_base / goal), min_width, col_width)
+        B_hi = max(B_lo, 2.0 * min_depth + col_width, B_star)
+        q_best = pressure(B_hi)
 
-    if pressure(B_lo) <= q_target:
-        B = B_lo
-    else:
+        if q_best > goal:
+            return None, q_best, B_hi
+        if pressure(B_lo) <= goal:
+            return B_lo, q_best, B_hi
+
         lo, hi = B_lo, B_hi
         for _ in range(80):
             mid = 0.5 * (lo + hi)
-            if pressure(mid) > q_target:
+            if pressure(mid) > goal:
                 lo = mid
             else:
                 hi = mid
-        B = hi
+        return hi, q_best, B_hi
+
+    # 1. Try the target utilisation (preference)
+    B, q_floor, B_at_floor = smallest_B(q_target)
+    target_met = B is not None
+
+    # 2. Target unreachable -> fall back to 100% of qa (hard limit)
+    if not target_met:
+        B, q_floor, B_at_floor = smallest_B(q_allow)
+
+        # 3. Even the best pad exceeds qa -> infeasible
+        if B is None:
+            return {"infeasible": True, "q_min": q_floor, "B_at_min": B_at_floor}
 
     B = math.ceil(B * 1000) / 1000  # snap up to 1 mm
 
@@ -283,7 +300,8 @@ def solve_pad(
         "t": max(0.5 * (B - col_width), min_depth),
         "N_ck_initial": N_base,
         "q_target": q_target,
-        "q_min": pressure(B_hi),
+        "q_min": q_floor,
+        "target_met": target_met,
     }
 
 
@@ -314,13 +332,21 @@ with calc_col:
             pad_unit_weight=pad_unit_weight,
         )
 
-        if result is None:
+        if result.get("infeasible"):
+            q_min = result["q_min"]
             st.error(
-                "No feasible pad size found. Because pad thickness grows with "
-                "width (t = (B − c)/2), the pad's own weight (plus surcharge) "
-                "raises bearing pressure as it gets larger, so it can never "
-                "reach the target pressure. Reduce the load, increase qₐ, or "
-                "raise the target utilisation."
+                "No pad size works for this load case. Even the most efficient "
+                "pad exceeds the allowable bearing pressure."
+            )
+            st.markdown(
+                f"The lowest pressure any pad can reach is "
+                f"**{q_min:.1f} kN/m²** ({q_min / q_allow * 100:.1f}% of qₐ), "
+                f"at around B = {result['B_at_min']:.1f} m. Beyond that, extra "
+                "width adds pad weight faster than it spreads the load, since "
+                "thickness grows with width (t = (B − c)/2).  \n"
+                "**Options:** reduce the load or surcharge, increase qₐ, or "
+                "tick the effective unit weight option if your qₐ is a net "
+                "pressure."
             )
             continue
 
@@ -355,9 +381,19 @@ with calc_col:
         check_line = (
             "✔ Bearing capacity OK"
             if ok
-            else "✘ Bearing capacity EXCEEDED after rounding – increase pad size manually or reduce load"
+            else "✘ Bearing pressure exceeds qₐ after rounding up – see note above"
         )
         sign = "≤" if ok else ">"
+
+        target_note = (
+            ""
+            if result["target_met"]
+            else (
+                f"  \n*Target not achievable for this pad (lowest possible "
+                f"utilisation ≈ {result['q_min'] / q_allow * 100:.1f}%). "
+                f"The pad is sized to the smallest width within qₐ (100%) instead.*"
+            )
+        )
 
         pad["results"] = {
             "B_final": B_final,
@@ -380,7 +416,7 @@ Pad self-weight is included in the design and depends on the adopted pad dimensi
 **2. Target bearing pressure**  
 
 q_target = {target_utilisation:.2f} × qₐ  
-= {q_target:.1f} kN/m²
+= {q_target:.1f} kN/m²{target_note}
 
 ---
 
@@ -480,10 +516,26 @@ q_ed = Nck / B²
         st.metric("Concrete volume", f"{volume:.2f} m³")
         st.metric("Pad depth", f"{t_round:.2f} m")
 
+        if not result["target_met"]:
+            st.warning(
+                f"The {target_utilisation * 100:.0f}% target can't be reached for "
+                f"this pad: its own weight grows with its width, so utilisation "
+                f"can't go below about {result['q_min'] / q_allow * 100:.1f}%. "
+                f"Sized instead to the smallest pad within qₐ "
+                f"({utilisation * 100:.1f}% utilisation).  \n"
+                "To reach the target, reduce the load, use the effective unit "
+                "weight (if qₐ is net), or increase qₐ."
+            )
+
         if ok:
             st.success("Design OK")
         else:
-            st.error("Bearing pressure exceeds allowable after rounding")
+            st.error(
+                f"After rounding up to {rounding:.1f} m, bearing pressure is "
+                f"{utilisation * 100:.1f}% of qₐ. Past the lowest-pressure "
+                "width, a larger pad adds more weight than it saves, so try a "
+                "finer rounding increment or reduce the load."
+            )
 
         with st.expander("Show calculation steps"):
             st.markdown(pad["results"]["calc_md"])
@@ -538,7 +590,7 @@ with results_col:
                 }
             )
 
-        st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(summary_data), width="stretch")
 
         skipped = len(st.session_state.pads) - len(solved)
         if skipped:
