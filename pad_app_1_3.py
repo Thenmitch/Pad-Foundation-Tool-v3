@@ -1,6 +1,7 @@
 import streamlit as st
 import math
 import base64
+import pandas as pd
 
 from io import BytesIO
 from PIL import Image
@@ -16,30 +17,37 @@ st.set_page_config(
     layout="wide",
 )
 
-# -------- LOAD BRANDING TEMPLATE (CSS) --------
-with open("assets/style.css") as f:
-    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# -------- LOAD LOGOS --------
-logo = Image.open("assets/whe_logo_hori.png")
-watermark = Image.open("assets/whe_watermark.png")
+# -------- CACHED ASSET LOADING (runs once, not on every rerun) --------
+@st.cache_resource
+def load_css():
+    with open("assets/style.css") as f:
+        return f.read()
 
-# -------- HEADER: LOGO TOP-LEFT + CENTRED TITLE --------
+
+@st.cache_resource
+def load_images():
+    logo = Image.open("assets/whe_logo_hori.png")
+    watermark = Image.open("assets/whe_watermark.png")
+    buffer = BytesIO()
+    watermark.save(buffer, format="PNG")
+    watermark_b64 = base64.b64encode(buffer.getvalue()).decode()
+    return logo, watermark_b64
+
+
+st.markdown(f"<style>{load_css()}</style>", unsafe_allow_html=True)
+logo, img_base64 = load_images()
+
+# -------- HEADER --------
 col1, col2, col3 = st.columns([2, 2, 0.5])
 
 with col3:
-    st.image(logo, width=200)   # Top-right logo
+    st.image(logo, width=200)
 
 with col1:
     st.title("Pad Foundation Preliminary Sizing Tool")
-# (col3 left empty so title stays centred)
 
 # -------- FAINT WATERMARK IN BACKGROUND --------
-buffer = BytesIO()
-watermark.save(buffer, format="PNG")
-img_base64 = base64.b64encode(buffer.getvalue()).decode()
-
-# Inject the base64 image into the CSS
 st.markdown(
     f"""
     <style>
@@ -48,16 +56,12 @@ st.markdown(
     }}
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 # --------------------------------------------------
 
-st.set_option("client.toolbarMode", "minimal")
-st.set_option("client.showErrorDetails", False)
-
-st.caption("Version v1.3 – With Branding")
-#st.title("Pad Foundation Preliminary Sizing Tool")
+st.caption("Version v1.4 – Robust solver for high loads")
 st.markdown(
     """
     **Purpose**  
@@ -92,11 +96,6 @@ GAMMA_CONC = 24.0  # kN/m³
 gamma_G = 1.0
 gamma_Q = 1.0
 
-DEPTH_STEP = 0.05
-DEPTH_SEARCH_LIMIT = 3.0
-
-B_REFINE_STEP = 0.01  # m (10 mm)
-
 # --------------------------------------------------
 # INPUTS (COMMON)
 # --------------------------------------------------
@@ -119,7 +118,7 @@ with input_col:
             "Round foundation size up to:",
             options=[0.10, 0.20],
             index=1,
-    )
+        )
 
     with col2:
         target_utilisation = st.slider(
@@ -129,7 +128,7 @@ with input_col:
             value=90,
             step=5,
         ) / 100.0
-        
+
         soil_unit_weight = st.number_input(
             "Soil unit weight, γₛ (kN/m³)",
             min_value=12.0,
@@ -137,8 +136,11 @@ with input_col:
             value=18.0,
             step=0.5,
         )
-    
-        pad_effective_weight = st.checkbox("Use effective unit weight (γc - γs) for self-weight calculation", value=False)
+
+        pad_effective_weight = st.checkbox(
+            "Use effective unit weight (γc - γs) for self-weight calculation",
+            value=False,
+        )
         if pad_effective_weight:
             pad_unit_weight = GAMMA_CONC - soil_unit_weight
         else:
@@ -162,7 +164,7 @@ with input_col:
     col1, col2 = st.columns(2)
 
     with col1:
-        G = st.number_input("Dead load, G (kN)", value=3000.0, step=25.0)
+        G = st.number_input("Dead load, G (kN)", value=300.0, step=25.0)
         Sur_G = st.number_input(
             "Additional surcharge Dead load (kN/m²)", value=0.0, step=0.5
         )
@@ -173,16 +175,16 @@ with input_col:
             "Additional surcharge Live load (kN/m²)", value=0.0, step=0.5
         )
 
-    if st.button("➕ Add pad foundation"):
-        st.session_state.pads.append(
-            {
-                "id": len(st.session_state.pads) + 1,
-                "G": G,
-                "Q": Q,
-                "Sur_G": Sur_G,
-                "Sur_Q": Sur_Q,
-            }
-        )
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("➕ Add pad foundation"):
+            next_id = max((p["id"] for p in st.session_state.pads), default=0) + 1
+            st.session_state.pads.append(
+                {"id": next_id, "G": G, "Q": Q, "Sur_G": Sur_G, "Sur_Q": Sur_Q}
+            )
+    with b2:
+        if st.button("🗑️ Clear all pads"):
+            st.session_state.pads = []
 
     st.divider()
 
@@ -192,14 +194,28 @@ with input_col:
 # --------------------------------------------------
 
 def round_up(value, inc):
-    return math.ceil(value / inc) * inc
+    # round() guards against float noise, e.g. 1.5/0.1 = 15.000000000000002
+    return round(math.ceil(round(value / inc, 9)) * inc, 6)
 
-def round_down(value, inc):
-    return math.floor(value / inc) * inc
 
 # --------------------------------------------------
-# depth to width B relationship: t = B / 2
+# SOLVER
 # --------------------------------------------------
+# Geometry rule: t = max(B / 2, min_depth)
+#
+# Bearing pressure as a function of B:
+#   q(B) = N_base / B²  +  surcharge  +  γG·γpad·t(B)
+#
+# With t = B/2 the self-weight term GROWS with B, so q(B) falls, hits a
+# minimum, then rises again. That means:
+#   * the old "while util > target: B += 0.01" loop could never terminate
+#     for large loads (no size satisfies the target), and
+#   * even when it did converge it took thousands of iterations.
+#
+# Instead: find the minimum of q(B) analytically, check feasibility, then
+# bisect on the falling branch for the smallest B that meets the target.
+# --------------------------------------------------
+
 def solve_pad(
     G,
     Q,
@@ -208,61 +224,53 @@ def solve_pad(
     q_allow,
     target_utilisation,
     min_width,
-    min_depth,          # kept for interface consistency
-    rounding,           # kept for interface consistency
+    min_depth,
     include_self_weight,
+    pad_unit_weight,
 ):
-
-    # --------------------------------------------------
-    # Base loads (excluding pad & surcharge)
-    # --------------------------------------------------
-    N_ck_initial = gamma_G * G + gamma_Q * Q
+    N_base = gamma_G * G + gamma_Q * Q
     q_target = target_utilisation * q_allow
+    q_sur = gamma_G * Sur_G + gamma_Q * Sur_Q
 
-    # --------------------------------------------------
-    # Initial width from bearing only
-    # --------------------------------------------------
-    A_req = N_ck_initial / q_target
-    B = max(math.sqrt(A_req), min_width)
+    def pressure(B):
+        t = max(0.5 * B, min_depth)
+        q_sw = gamma_G * pad_unit_weight * t if include_self_weight else 0.0
+        return N_base / B**2 + q_sur + q_sw
 
-    # --------------------------------------------------
-    # Refine width (continuous, no rounding)
-    # Enforce t = B / 2 at ALL times
-    # --------------------------------------------------
-    while True:
+    # Lower bound: bearing-only width, or the minimum width
+    B_lo = max(math.sqrt(N_base / q_target), min_width)
 
-        t = max(0.5 * B, min_depth) # ← enforced geometry rule
+    # Width at which pressure is lowest (end of falling branch)
+    if include_self_weight and pad_unit_weight > 0:
+        B_star = (4.0 * N_base / (gamma_G * pad_unit_weight)) ** (1.0 / 3.0)
+    else:
+        B_star = 1e4  # no self-weight: pressure only ever falls
+    B_hi = max(B_lo, 2.0 * min_depth, B_star)
 
-        # Surcharges
-        N_ck_sur_G = Sur_G * B**2
-        N_ck_sur_Q = Sur_Q * B**2
+    # Feasibility: can ANY size meet the target?
+    if pressure(B_hi) > q_target:
+        return None
 
-        # Self-weight
-        W_pad = B**2 * t * pad_unit_weight if include_self_weight else 0.0
+    if pressure(B_lo) <= q_target:
+        B = B_lo
+    else:
+        lo, hi = B_lo, B_hi
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            if pressure(mid) > q_target:
+                lo = mid
+            else:
+                hi = mid
+        B = hi
 
-        # Final axial load
-        N_ck = (
-            gamma_G * (G + W_pad + N_ck_sur_G)
-            + gamma_Q * (Q + N_ck_sur_Q)
-        )
+    B = math.ceil(B * 1000) / 1000  # snap up to 1 mm
 
-        # Bearing pressure
-        q_ed = N_ck / B**2
-        util = q_ed / q_allow
-
-        if util > target_utilisation:
-            B += B_REFINE_STEP
-        else:
-            break
-
-    # --------------------------------------------------
-    # Return continuous (unrounded) solution
-    # --------------------------------------------------
     return {
         "B_opt": B,
-        "t": t,
-        "N_ck_initial": N_ck_initial,
+        "t": max(0.5 * B, min_depth),
+        "N_ck_initial": N_base,
         "q_target": q_target,
+        "q_min": pressure(B_hi),
     }
 
 
@@ -276,6 +284,7 @@ with calc_col:
     for pad in st.session_state.pads:
 
         st.subheader(f"Pad {pad['id']}")
+        pad.pop("results", None)
 
         result = solve_pad(
             G=pad["G"],
@@ -286,58 +295,63 @@ with calc_col:
             target_utilisation=target_utilisation,
             min_width=min_width,
             min_depth=min_depth,
-            rounding=rounding,
             include_self_weight=include_self_weight,
+            pad_unit_weight=pad_unit_weight,
         )
 
         if result is None:
-            st.error("No feasible pad size found for this load case.")
+            st.error(
+                "No feasible pad size found. With depth t = B/2, the pad's own "
+                "weight (plus surcharge) raises bearing pressure as it gets "
+                "larger, so it can never reach the target pressure. Reduce the "
+                "load, increase qₐ, raise the target utilisation, or reconsider "
+                "the t = B/2 rule for this pad."
+            )
             continue
 
-        # ---- continuous optimum ----
         B_opt = result["B_opt"]
-        t = result["t"]
         N_ck_initial = result["N_ck_initial"]
         q_target = result["q_target"]
 
         # ---- round UP (conservative) ----
         B_final = round_up(B_opt, rounding)
-        # ---- enforce geometry AFTER rounding ----
         t_round = max(0.5 * B_final, min_depth)
 
-        # ---- self-weight ----
         W_pad = B_final**2 * t_round * pad_unit_weight if include_self_weight else 0.0
 
-        # ---- surcharge ----
         N_ck_sur_G = pad["Sur_G"] * B_final**2
         N_ck_sur_Q = pad["Sur_Q"] * B_final**2
         N_ck_surcharge = N_ck_sur_G + N_ck_sur_Q
 
-        # ---- final axial load ----
         N_ck_final = (
             gamma_G * (pad["G"] + W_pad + N_ck_sur_G)
             + gamma_Q * (pad["Q"] + N_ck_sur_Q)
         )
 
-        # ---- bearing pressure ----
         q_ed = N_ck_final / B_final**2
         utilisation = q_ed / q_allow
+        ok = q_ed <= q_allow
 
-        # ---- indicative sizing ----
         A0 = N_ck_initial / q_target
         B0 = math.sqrt(A0)
 
         volume = B_final**2 * t_round
 
+        check_line = (
+            "✔ Bearing capacity OK"
+            if ok
+            else "✘ Bearing capacity EXCEEDED after rounding – increase pad size manually or reduce load"
+        )
+        sign = "≤" if ok else ">"
 
         pad["results"] = {
-        "B_final": B_final,
-        "t_round": t_round,
-        "q_ed": q_ed,
-        "utilisation": utilisation,
-        "N_ck": N_ck_final,
-        "volume": volume,
-        "calc_md": f"""
+            "B_final": B_final,
+            "t_round": t_round,
+            "q_ed": q_ed,
+            "utilisation": utilisation,
+            "N_ck": N_ck_final,
+            "volume": volume,
+            "calc_md": f"""
 **1. Applied loads contributing to foundation design**  
 
 Column dead load, G = {pad['G']:.1f} kN  
@@ -373,13 +387,13 @@ B = √A = {B0:.2f} m
 
 ---
 
-**Iterative Process to Include Size-Dependent Effects**
+**Solving for Size-Dependent Effects**
 
-Between steps 4 - 5, an iterative process is carried out to refine the pad width to include the effects of pad self-weight and surcharge loads.
+The pad width is refined to include pad self-weight and surcharge loads (solved directly, not by stepping).
 
-This is then rounded **upwards** to the given rounding, and for constructability and conservatism.
+This is then rounded **upwards** to the given rounding, for constructability and conservatism.
 
-The following steps use this adopted size in the calculations, showing the final design and its checks, rather than the whole iterative process.
+The following steps use this adopted size, showing the final design and its checks.
 
 ---
 
@@ -398,9 +412,7 @@ Adopted pad depth:
 
 **5. Pad self-weight**  
 
-Pad self-weight calculated from adopted geometry:
-
-Pad self-weight calculated by using either the full concrete unit weight (γc) or the effective unit weight (γc - γs) if selected.
+Pad self-weight calculated using either the full concrete unit weight (γc) or the effective unit weight (γc - γs) if selected.
 
 W = B² · t · γc  
 = {B_final:.2f}² × {t_round:.2f} × {pad_unit_weight:.1f}  
@@ -426,8 +438,6 @@ Total surcharge load:
 
 **7. Design axial load including self-weight and surcharge**  
 
-Total design axial load acting on soil beneath pad:
-
 Nck = γG·(G + W + Gₛ) + γQ·(Q + Qₛ)
 
 = {gamma_G:.2f}×({pad['G']:.1f} + {W_pad:.1f} + {N_ck_sur_G:.1f})  
@@ -442,13 +452,11 @@ Nck = γG·(G + W + Gₛ) + γQ·(Q + Qₛ)
 q_ed = Nck / B²  
 = {N_ck_final:.1f} / {B_final:.2f}²  
 
-**q_ed = {q_ed:.1f} kN/m² ≤ {q_allow:.1f} kN/m²**
+**q_ed = {q_ed:.1f} kN/m² {sign} {q_allow:.1f} kN/m²**
 
-✔ Bearing capacity OK
-"""
-
-}
-
+{check_line}
+""",
+        }
 
         st.metric("Pad size", f"{B_final:.2f} m × {B_final:.2f} m")
         st.metric("Bearing pressure", f"{q_ed:.1f} kN/m²")
@@ -456,7 +464,10 @@ q_ed = Nck / B²
         st.metric("Concrete volume", f"{volume:.2f} m³")
         st.metric("Pad depth", f"{t_round:.2f} m")
 
-        st.success("Design OK")
+        if ok:
+            st.success("Design OK")
+        else:
+            st.error("Bearing pressure exceeds allowable after rounding")
 
         with st.expander("Show calculation steps"):
             st.markdown(pad["results"]["calc_md"])
@@ -485,32 +496,34 @@ with st.expander("Show Assumptions"):
     )
 
 # --------------------------------------------------
-# RESULTS TABLE (BACK TO STREAMLIT DATAFRAME)
+# RESULTS TABLE
 # --------------------------------------------------
 with results_col:
     st.header("Summary of Pad Foundations")
 
+    solved = [p for p in st.session_state.pads if "results" in p]
+
     if len(st.session_state.pads) == 0:
         st.info("No pad foundations added yet.")
+    elif not solved:
+        st.warning("No pads could be sized with the current inputs.")
     else:
-        import pandas as pd
-
         summary_data = []
-        for pad in st.session_state.pads:
+        for pad in solved:
             res = pad["results"]
             summary_data.append(
                 {
                     "Pad ID": pad["id"],
-                    "Width (m)": float(f"{res['B_final']:.2f}"),
-                    "Depth (m)": float(f"{res['t_round']:.2f}"),
-                    "Utilisation (%)": float(f"{res['utilisation']*100:.1f}"),
-                    "SLS Load (kN)": float(f"{res['N_ck']:.1f}"),
-                    "Volume (m³)": float(f"{res['volume']:.2f}"),
+                    "Width (m)": round(res["B_final"], 2),
+                    "Depth (m)": round(res["t_round"], 2),
+                    "Utilisation (%)": round(res["utilisation"] * 100, 1),
+                    "SLS Load (kN)": round(res["N_ck"], 1),
+                    "Volume (m³)": round(res["volume"], 2),
                 }
             )
 
-        df = pd.DataFrame(summary_data)
+        st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
 
-        # SIMPLE STREAMLIT TABLE
-        st.dataframe(df, use_container_width=True)
-
+        skipped = len(st.session_state.pads) - len(solved)
+        if skipped:
+            st.caption(f"{skipped} pad(s) have no feasible size and are excluded.")
