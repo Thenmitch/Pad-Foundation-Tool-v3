@@ -49,6 +49,9 @@ def get_engineering_assumptions(
   where B = pad width, c = column / pier width, t_min = minimum pad depth
 - Pad width is solved directly so that bearing pressure, including
   self-weight and surcharge, does not exceed the target utilisation
+  (adjustable up to 100% of qₐ). If the target cannot be reached because
+  pad weight grows with width, the smallest pad within 100% of qₐ is used
+  and a warning is shown
 - Foundation widths rounded **upwards only** to {rounding:.2f} m increments, then
   re-checked against the allowable bearing pressure
 
