@@ -164,7 +164,7 @@ with input_col:
     col1, col2 = st.columns(2)
 
     with col1:
-        G = st.number_input("Dead load, G (kN)", value=300.0, step=25.0)
+        G = st.number_input("Dead load, G (kN)", value=3000.0, step=25.0)
         Sur_G = st.number_input(
             "Additional surcharge Dead load (kN/m²)", value=0.0, step=0.5
         )
@@ -175,12 +175,23 @@ with input_col:
             "Additional surcharge Live load (kN/m²)", value=0.0, step=0.5
         )
 
+    col_w = st.number_input(
+        "Column / pier width, c (m)", min_value=0.1, value=0.45, step=0.05
+    )
+
     b1, b2 = st.columns(2)
     with b1:
         if st.button("➕ Add pad foundation"):
             next_id = max((p["id"] for p in st.session_state.pads), default=0) + 1
             st.session_state.pads.append(
-                {"id": next_id, "G": G, "Q": Q, "Sur_G": Sur_G, "Sur_Q": Sur_Q}
+                {
+                    "id": next_id,
+                    "G": G,
+                    "Q": Q,
+                    "Sur_G": Sur_G,
+                    "Sur_Q": Sur_Q,
+                    "c": col_w,
+                }
             )
     with b2:
         if st.button("🗑️ Clear all pads"):
@@ -201,7 +212,8 @@ def round_up(value, inc):
 # --------------------------------------------------
 # SOLVER
 # --------------------------------------------------
-# Geometry rule: t = max(B / 2, min_depth)
+# Geometry rule (unreinforced, 45° load spread):
+#   t = max((B - c) / 2, min_depth)   where c = column width
 #
 # Bearing pressure as a function of B:
 #   q(B) = N_base / B²  +  surcharge  +  γG·γpad·t(B)
@@ -225,6 +237,7 @@ def solve_pad(
     target_utilisation,
     min_width,
     min_depth,
+    col_width,
     include_self_weight,
     pad_unit_weight,
 ):
@@ -233,19 +246,19 @@ def solve_pad(
     q_sur = gamma_G * Sur_G + gamma_Q * Sur_Q
 
     def pressure(B):
-        t = max(0.5 * B, min_depth)
+        t = max(0.5 * (B - col_width), min_depth)
         q_sw = gamma_G * pad_unit_weight * t if include_self_weight else 0.0
         return N_base / B**2 + q_sur + q_sw
 
     # Lower bound: bearing-only width, or the minimum width
-    B_lo = max(math.sqrt(N_base / q_target), min_width)
+    B_lo = max(math.sqrt(N_base / q_target), min_width, col_width)
 
     # Width at which pressure is lowest (end of falling branch)
     if include_self_weight and pad_unit_weight > 0:
         B_star = (4.0 * N_base / (gamma_G * pad_unit_weight)) ** (1.0 / 3.0)
     else:
         B_star = 1e4  # no self-weight: pressure only ever falls
-    B_hi = max(B_lo, 2.0 * min_depth, B_star)
+    B_hi = max(B_lo, 2.0 * min_depth + col_width, B_star)
 
     # Feasibility: can ANY size meet the target?
     if pressure(B_hi) > q_target:
@@ -267,7 +280,7 @@ def solve_pad(
 
     return {
         "B_opt": B,
-        "t": max(0.5 * B, min_depth),
+        "t": max(0.5 * (B - col_width), min_depth),
         "N_ck_initial": N_base,
         "q_target": q_target,
         "q_min": pressure(B_hi),
@@ -285,6 +298,7 @@ with calc_col:
 
         st.subheader(f"Pad {pad['id']}")
         pad.pop("results", None)
+        c = pad.get("c", 0.45)
 
         result = solve_pad(
             G=pad["G"],
@@ -295,17 +309,18 @@ with calc_col:
             target_utilisation=target_utilisation,
             min_width=min_width,
             min_depth=min_depth,
+            col_width=c,
             include_self_weight=include_self_weight,
             pad_unit_weight=pad_unit_weight,
         )
 
         if result is None:
             st.error(
-                "No feasible pad size found. With depth t = B/2, the pad's own "
-                "weight (plus surcharge) raises bearing pressure as it gets "
-                "larger, so it can never reach the target pressure. Reduce the "
-                "load, increase qₐ, raise the target utilisation, or reconsider "
-                "the t = B/2 rule for this pad."
+                "No feasible pad size found. Because pad thickness grows with "
+                "width (t = (B − c)/2), the pad's own weight (plus surcharge) "
+                "raises bearing pressure as it gets larger, so it can never "
+                "reach the target pressure. Reduce the load, increase qₐ, or "
+                "raise the target utilisation."
             )
             continue
 
@@ -315,7 +330,7 @@ with calc_col:
 
         # ---- round UP (conservative) ----
         B_final = round_up(B_opt, rounding)
-        t_round = max(0.5 * B_final, min_depth)
+        t_round = max(0.5 * (B_final - c), min_depth)
 
         W_pad = B_final**2 * t_round * pad_unit_weight if include_self_weight else 0.0
 
@@ -402,8 +417,9 @@ The following steps use this adopted size, showing the final design and its chec
 Adopted pad width:  
 **B = {B_final:.2f} m**
 
-Pad depth governed by geometric rule:  
-t = B / 2  
+Pad depth governed by 45° load spread (unreinforced pad):  
+t = max((B − c) / 2, t_min)  
+= max(({B_final:.2f} − {c:.2f}) / 2, {min_depth:.2f})  
 
 Adopted pad depth:  
 **t = {t_round:.2f} m**
