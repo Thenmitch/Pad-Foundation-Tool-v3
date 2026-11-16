@@ -168,7 +168,7 @@ with input_col:
     col1, col2 = st.columns(2)
 
     with col1:
-        G = st.number_input("Dead load, G (kN)", value=3000.0, step=25.0)
+        G = st.number_input("Dead load, G (kN)", value=300.0, step=25.0)
         Sur_G = st.number_input(
             "Additional surcharge Dead load (kN/m²)", value=0.0, step=0.5
         )
